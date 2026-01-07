@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="60">
+    <title>MonitorBox | Server Pulse</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg: #f8fafc; --card-bg: #ffffff; --primary: #6366f1;
+            --success: #22c55e; --danger: #ef4444; --text-main: #1e293b; --text-muted: #64748b;
+        }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text-main); margin: 0; padding: 15px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+        .header h1 { font-size: 1.5rem; margin: 0; color: var(--primary); display: flex; align-items: center; gap: 10px; }
+        .stats-container { display: flex; gap: 10px; align-items: center; }
+        .badge { padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 0.8rem; }
+        .badge-cycle { background: #e0e7ff; color: #4338ca; }
+        .badge-ok { background: #dcfce7; color: #15803d; }
+        .badge-ko { background: #fee2e2; color: #b91c1c; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .card { 
+            background: var(--card-bg); border: 1px solid #e2e8f0; border-radius: 12px; 
+            padding: 12px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            position: relative; border-left: 4px solid #cbd5e1; transition: transform 0.2s;
+        }
+        .card.online { border-left-color: var(--success); }
+        .card.offline { border-left-color: var(--danger); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .card-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+        .actions { display: flex; gap: 6px; align-items: center; }
+        .action-btn { cursor: pointer; background: none; border: none; padding: 2px; font-size: 1.1rem; opacity: 0.7; transition: 0.2s; }
+        .action-btn:hover { opacity: 1; transform: scale(1.1); }
+        .mute-btn.muted { filter: grayscale(1); opacity: 0.3; }
+        .link-btn { color: var(--primary); }
+        .fav-btn { color: #cbd5e1; }
+        .fav-btn.active { color: #f59e0b; opacity: 1; }
+        .status-line { display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 6px; color: var(--text-muted); }
+        .status-val { font-weight: 700; }
+        .text-ok { color: var(--success); }
+        .text-ko { color: var(--danger); }
+        .section-title { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; margin: 25px 0 10px; font-weight: 600; }
+        .chart-section { background: white; border-radius: 12px; padding: 20px; height: 250px; }
+        footer { text-align: center; margin-top: 30px; font-size: 0.85rem; color: var(--text-muted); }
+		a { color: var(--primary); text-decoration: none; font-weight: 600; }
+    </style>
+</head>
+<body onclick="unlockAudio()">
+
+    <audio id="alert-sound" preload="auto">
+        <source src="alert.ogg" type="audio/ogg">
+        <source src="alert.mp3" type="audio/mpeg">
+    </audio>
+
+    <div class="header">
+        <h1>MonitorBox | Server Pulse <span id="cycle-display" class="badge badge-cycle">Cycle --</span></h1>
+        <div class="stats-container">
+            <span id="stat-ok" class="badge badge-ok">OK: --</span>
+            <span id="stat-ko" class="badge badge-ko">KO: --</span>
+            <div id="last-update" style="font-size: 0.75rem; color: var(--text-muted);"></div>
+        </div>
+    </div>
+
+    <div id="fav-section" style="display:none;"><div class="section-title">⭐ Favoris</div><div class="grid" id="grid-fav"></div></div>
+    <div class="section-title">🌐 Infrastructure</div><div class="grid" id="grid-all"></div>
+    <div class="section-title">📈 Tendance</div><div class="chart-section"><canvas id="healthChart"></canvas></div>
+
+    <script src="data.js"></script>
+
+    <script>
+        const favs = JSON.parse(localStorage.getItem('monitorFavs') || '[]');
+        const muted = JSON.parse(localStorage.getItem('monitorMuted') || '[]');
+        let isAudioUnlocked = false;
+
+        // Débloque l'audio de manière invisible au premier clic
+        function unlockAudio() {
+            if (!isAudioUnlocked) {
+                const audio = document.getElementById('alert-sound');
+                audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {});
+                isAudioUnlocked = true;
+                console.log("Audio débloqué");
+            }
+        }
+
+        function toggleFav(name) {
+            const idx = favs.indexOf(name);
+            idx > -1 ? favs.splice(idx, 1) : favs.push(name);
+            localStorage.setItem('monitorFavs', JSON.stringify(favs));
+            location.reload();
+        }
+
+        function toggleMute(name) {
+            const idx = muted.indexOf(name);
+            idx > -1 ? muted.splice(idx, 1) : muted.push(name);
+            localStorage.setItem('monitorMuted', JSON.stringify(muted));
+            location.reload();
+        }
+
+        if (typeof serverData !== 'undefined') {
+            document.getElementById('last-update').innerText = lastUpdate;
+            document.getElementById('cycle-display').innerText = "Cycle " + cycleCount;
+            
+            const totalOk = serverData.filter(s => s.class === 'online').length;
+            const totalKo = serverData.filter(s => s.class === 'offline').length;
+            document.getElementById('stat-ok').innerText = "OK: " + totalOk;
+            document.getElementById('stat-ko').innerText = "KO: " + totalKo;
+
+            let shouldAlarm = false;
+
+            serverData.forEach(site => {
+                const isFav = favs.includes(site.name);
+                const isMuted = muted.includes(site.name);
+                if (site.class === 'offline' && !isMuted) shouldAlarm = true;
+
+                const cardHtml = `
+                    <div class="card ${site.class}">
+                        <div class="card-header">
+                            <span class="card-name">${site.name}</span>
+                            <div class="actions">
+                                <button class="action-btn mute-btn ${isMuted?'muted':''}" onclick="toggleMute('${site.name}')">${isMuted?'🔇':'🔊'}</button>
+                                ${site.use_pager==='yes'?'<span class="action-btn">📟</span>':''}
+                                <a href="${site.url}" target="_blank" class="action-btn link-btn">🔗</a>
+                                <button class="action-btn fav-btn ${isFav?'active':''}" onclick="toggleFav('${site.name}')">★</button>
+                            </div>
+                        </div>
+                        <div class="status-line"><span>PING</span><span class="status-val ${site.ping==='KO'?'text-ko':'text-ok'}">${site.ping}</span></div>
+                        <div class="status-line"><span>WEB</span><span class="status-val ${site.web==='KO'?'text-ko':'text-ok'}">${site.web}</span></div>
+                    </div>`;
+                if(isFav) { document.getElementById('fav-section').style.display='block'; document.getElementById('grid-fav').innerHTML+=cardHtml; }
+                else { document.getElementById('grid-all').innerHTML+=cardHtml; }
+            });
+
+            if (shouldAlarm) {
+                const audio = document.getElementById('alert-sound');
+                audio.play().catch(e => console.log("Audio en attente d'interaction"));
+            }
+
+            const ctx = document.getElementById('healthChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: historyPing.map((_, i) => "C" + (cycleCount - historyPing.length + i + 1)),
+                    datasets: [{ label: 'Ping', data: historyPing, borderColor: '#6366f1', fill: true, tension: 0.4 },
+                               { label: 'Web', data: historyWeb, borderColor: '#22c55e', tension: 0.4 }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+    </script>
+    <footer>
+	        <p>[ Logiciel proposé par <a href="https://simple-crm.ai" target="_blank">SIMPLE CRM</a> 
+        - Codé par <a href="https://www.ihaveto.be" target="_blank">Brice Cornet</a> - Dispo sur 
+<a href="https://github.com/simple-group/server-pulse" target="_blank">GITHUB</a> ]</p></footer>
+</body>
+</html>
