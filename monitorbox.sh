@@ -40,6 +40,9 @@ do
         [[ $url =~ ^#.*$ ]] || [[ -z $url ]] && continue
 
         echo
+        echo
+        echo -e "\e[1;34mMONITORING : $url\e[00m"
+        echo
         echo > tmp
         # UTILISATION STRICTE DE TA METHODE D'ORIGINE
         curl -o tmp "$url"
